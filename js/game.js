@@ -31,18 +31,19 @@ var soundAssets = {
 var shipProperties = {
 	startX: gameProperties.screenWidth*0.5,
 	startY: gameProperties.screenHeight*0.5,
-	acceleration: 200,
+	acceleration: 250,
 	drag: 20, // friction
 	maxVelocity: 300,
-	angularVelocity: 260, // how fast the ship can rotate
+	angularVelocity: 300, // how fast the ship can rotate
 	startingLives: 3,
 	timeToReset: 3,
 	blinkDelay: 0.1,
+	hyperInterval: 1, // 5 seconds
 };
 
 var bulletProperties = {
-	speed: 400,
-	interval: 250, // firing rate: 1 round every 0.25 seconds.
+	speed: 450,
+	interval: 250, // firing rate: 1 round every 0.xxx seconds.
 	lifespan: 2000,
 	maxCount: 30,
 };
@@ -50,11 +51,11 @@ var bulletProperties = {
 var asteroidProperties = {
 	startingAsteroids: 4, // when starting a new game
 	maxAsteroids: 20,
-	incrementAsteroids: 1, // increase num. of asteroids after each round
+	incrementAsteroids: 2, // increase num. of asteroids after each round
 		
-	asteroidLarge: { minVelocity: 50, maxVelocity: 150, minAngularVelocity: 0, maxAngularVelocity: 200, score: 20, nextSize: graphicAssets.asteroidMedium.name, pieces: 2 },
-	asteroidMedium: { minVelocity: 50, maxVelocity: 200, minAngularVelocity: 0, maxAngularVelocity: 200, score: 50, nextSize: graphicAssets.asteroidSmall.name, pieces: 2 },
-	asteroidSmall: { minVelocity: 50, maxVelocity: 300, minAngularVelocity: 0, maxAngularVelocity: 200, score: 100 },
+	asteroidLarge: { minVelocity: 50, maxVelocity: 100, minAngularVelocity: 0, maxAngularVelocity: 200, score: 20, nextSize: graphicAssets.asteroidMedium.name, pieces: 2 },
+	asteroidMedium: { minVelocity: 50, maxVelocity: 150, minAngularVelocity: 0, maxAngularVelocity: 200, score: 50, nextSize: graphicAssets.asteroidSmall.name, pieces: 2 },
+	asteroidSmall: { minVelocity: 50, maxVelocity: 200, minAngularVelocity: 0, maxAngularVelocity: 200, score: 100 },
 };
 
 var fontAssets = {
@@ -69,13 +70,15 @@ var gameState = function (game) {
 	this.key_right;
 	this.key_thrust;
 	this.key_fire;
+	this.key_hyper; // the key used for hyperspace
+	this.canHyper;
+	this.hyperInterval;
 		
 	this.bulletGroup;
 	this.asteroidGroup;
 	this.lifeGroup;
 		
 	this.tf_lives; // used to display lives counter
-
 	this.tf_score; // text field to display score
 		
 	this.sndDestroyed;
@@ -104,6 +107,8 @@ gameState.prototype = {
 		this.asteroidsCount = asteroidProperties.startingAsteroids;
 		this.shipLives = shipProperties.startingLives; // how many lives left (default is 3)
 		this.score = 0;
+
+		this.hyperInterval = 0;
 	},
 
 	create: function () {
@@ -127,6 +132,8 @@ gameState.prototype = {
 		if (!this.shipIsInvulnerable) {
 			game.physics.arcade.overlap(this.shipSprite, this.asteroidGroup, this.asteroidCollision, null, this);
 		}
+
+
 	},
 
 	initGraphics: function () {
@@ -143,27 +150,9 @@ gameState.prototype = {
 		this.tf_score.align = 'left';
 		this.tf_score.anchor.set(0, 0); // anchor the text field at the top right
 	
-		this.drawLives();
+		this.initLifeGUI(); // Initialize the life counter GUI
 	},
-	
-	drawLives: function() {
-		// -- THIS FUNCTION IS BROKEN --
-		if (this.shipLives === shipProperties.startingLives) {
-			// Initializing sprites
-			for (i=0; i< shipProperties.startingLives; i++) {
-				// I draw them backwards just to use the "getFirstExists" function
-				var r = this.shipSprite.width*shipProperties.startingLives;
-				var lifeSprite = this.lifeGroup.create(r-(i*this.shipSprite.width),60,graphicAssets.ship.name);
-				lifeSprite.angle = -90;
-				lifeSprite.anchor.set(0,0);
-			}
-		} else {
-			// Remove a sprite
-			var topLife = this.lifeGroup.getFirstExists(true);
-			topLife.kill();
-		}
-	},
-		
+
     initSounds: function () {
         this.sndDestroyed = game.add.audio(soundAssets.destroyed.name);
         this.sndFire = game.add.audio(soundAssets.fire.name);
@@ -192,7 +181,7 @@ gameState.prototype = {
 		this.key_right = game.input.keyboard.addKey(Phaser.Keyboard.RIGHT);
 		this.key_thrust = game.input.keyboard.addKey(Phaser.Keyboard.UP);
 		this.key_fire = game.input.keyboard.addKey(Phaser.Keyboard.SPACEBAR);
-				
+		this.key_hyper = game.input.keyboard.addKey(Phaser.Keyboard.SHIFT);
 	},
 
 	checkPlayerInput: function () {
@@ -216,11 +205,80 @@ gameState.prototype = {
 		if (this.key_fire.isDown) {
 			this.fire();
 		}
+
+		if (this.key_hyper.isDown) {
+			this.hyperSpace();
+		}
 	},
+
+    initLifeGUI: function() {
+        // Initializing sprites
+        for (var i=0; i< shipProperties.startingLives; i++) {
+            // I draw them backwards just to use the "getFirstExists" function
+            var r = this.shipSprite.width*shipProperties.startingLives;
+            var lifeSprite = this.lifeGroup.create( /*r-*/ (this.shipSprite.width+(i*this.shipSprite.width)) ,60,graphicAssets.ship.name);
+            lifeSprite.angle = -90;
+            lifeSprite.anchor.set(0,0);
+        }
+    },
+
+    updateLifeGUI: function() {
+        // This function updates the GUI for the player's lives.
+        // NOT the number of lives itself.
+
+        // Get the number of "Lives" sprites being drawn
+        var lifeSprites = 0;
+        for (var i=0; i< this.lifeGroup.children.length; i++) {
+            if (this.lifeGroup.children[i].alive) {
+                lifeSprites+=1;
+            }
+        }
+
+        // Either remove or add Life indicator sprites
+        if (lifeSprites > this.shipLives) {
+            // Remove a sprite
+            // BUG instead of doing this I should get the right-most child instead
+			var largest_x = 0;
+			var rightmost_child;
+			for (var i=0; i< this.lifeGroup.children.length; i++) {
+				if (this.lifeGroup.children[i].alive && this.lifeGroup.children[i].x > largest_x) {
+					largest_x = this.lifeGroup.children[i].x;
+					rightmost_child = this.lifeGroup.children[i];
+				}
+			}
+			rightmost_child.kill();
+            //var topLife = this.lifeGroup.getFirstExists(true);
+            //topLife.kill();
+
+
+        } else if (lifeSprites < this.shipLives) {
+            // Add a sprite
+			var new_x = this.shipSprite.width;
+			for (var i=0; i< this.lifeGroup.children.length; i++) {
+				if (this.lifeGroup.children[i].alive && this.lifeGroup.children[i].x > new_x) {
+					new_x = this.lifeGroup.children[i];
+				}
+			}
+            //var new_x = this.lifeGroup.getFirstExists(true).x + (this.shipSprite.width);
+            var newLifeSprite = this.lifeGroup.create( new_x+this.shipSprite.width, 60, graphicAssets.ship.name);
+            newLifeSprite.angle = -90;
+            newLifeSprite.anchor.set(0,0);
+        }
+    },
 	
-	hyperspace: function () {
+	hyperSpace: function () {
+        if (!this.shipSprite.alive) {
+            return;
+        }
+
 		// Teleport to a random place on the screen when the
 		// hyperspace key is pressed (see: initKeyboard).
+		if (game.time.now > this.hyperInterval) {
+            var new_x = game.rnd.integerInRange(0, gameProperties.screenWidth);
+            var new_y = game.rnd.integerInRange(0, gameProperties.screenHeight);
+            this.shipSprite.reset(new_x, new_y);
+            this.hyperInterval = game.time.now + Phaser.Timer.SECOND * shipProperties.hyperInterval;
+        }
 	},
 		
 	checkBoundaries: function (sprite) {
@@ -256,7 +314,7 @@ gameState.prototype = {
 				
 				bullet.reset(x, y); // move our bullet to the x and y coords
 				bullet.lifespan = bulletProperties.lifespan; // 2 seconds
-				bullet.rotation - this.shipSprite.rotation;
+				bullet.rotation = this.shipSprite.rotation;
 				
 				game.physics.arcade.velocityFromRotation(this.shipSprite.rotation, bulletProperties.speed, bullet.body.velocity);
 				this.bulletInterval = game.time.now + bulletProperties.interval;
@@ -304,7 +362,7 @@ gameState.prototype = {
 		target.kill();
 		asteroid.kill();
 		
-		if (target.key == graphicAssets.ship.name) {
+		if (target.key === graphicAssets.ship.name) {
 			this.destroyShip();
 		}
 		
@@ -319,9 +377,8 @@ gameState.prototype = {
 	},
 		
 	destroyShip: function () {
-		this.shipLives-=1;
+		this.updateLives(-1);
 		//this.tf_lives.text = "LIVES : " + this.shipLives;
-		this.drawLives();
 		
 		if (this.shipLives > 0) { // if shipLives is not 0
 			// Call the reset function when the time runs out
@@ -355,13 +412,23 @@ gameState.prototype = {
 		// Check to see if the asteroid has a smaller size
 		if (asteroidProperties[asteroid.key].nextSize) {
 			this.createAsteroid(asteroid.x,asteroid.y,asteroidProperties[asteroid.key].nextSize, asteroidProperties[asteroid.key].pieces);
-			
 		}
 	},
 		
 	updateScore: function (score) {
 		this.score += score;
 		this.tf_score.text = this.score;
+
+		// Gain an extra life every 5000 points
+		// BUG !! score does not increase on 10 000 points
+		if ( ((this.score % 5000) === 0) && (this.shipLives < shipProperties.startingLives) ) {
+			this.updateLives(1);
+		}
+	},
+
+	updateLives: function (lives) {
+		this.shipLives += lives;
+		this.updateLifeGUI();
 	},
 		
 	nextLevel: function () {
@@ -386,7 +453,7 @@ var mainState = function(game) {
 
 mainState.prototype = {
 	create: function () {
-        var startInstructions = 'ASTEROIDS\n\nUP arrow to thrust.\n\nLEFT and RIGHT arrows to turn.\n\nSPACE to fire.\n\nClick to Start';
+        var startInstructions = 'ASTEROIDS\n\nUP arrow to thrust.\nLEFT and RIGHT arrows to turn.\nSPACE to fire.\nSHIFT to hyperspace!\n\nClick to Start';
         
         this.tf_start = game.add.text(game.world.centerX, game.world.centerY, startInstructions, fontAssets.counterFontStyle);
         this.tf_start.align = 'center';
